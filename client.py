@@ -1,6 +1,7 @@
 from socket import *
 import sys
 import signal
+import time
 
 class Client():
     def __init__(self, port):
@@ -13,7 +14,6 @@ class Client():
         self.clientPort = port
         # Socket
         self.clientSocket = socket(AF_INET, SOCK_STREAM)
-
         # Signal handler
         signal.signal(signal.SIGINT, self.signal_handler)
 
@@ -28,6 +28,7 @@ class Client():
         message = username + " " + password
 
         # Try to log the user in:
+        self.connectToServer(5)
         response = self.sendDataToServer(message)
 
         print(response)
@@ -36,16 +37,24 @@ class Client():
         while (True):
             pass
 
-    def connectToServer(self):
+    def connectToServer(self, timeoutT):
         self.clientSocket.connect((self.serverName, self.serverPort))
-        
+        self.clientSocket.settimeout(timeoutT)
+
     def sendDataToServer(self, message):
         # Send message to the server
-        self.clientSocket.send(message.encode())
-
-        #wait for the reply from the server
-        # receivedMessage, serverAddress = self.clientSocket.recvfrom(2048)
-        # return receivedMessage
+        try:
+            if self.clientSocket.fileno != -1:
+                self.clientSocket.send(message.encode())
+                #wait for the reply from the server
+                receivedMessage = self.clientSocket.recv(2048)
+                return receivedMessage
+        except timeout:
+            print ('Connection timed out')
+            self.clientSocket.close()
+        except Exception as e:
+            print(e)
+        
 
     def signal_handler(self, sig, frame):
         self.endClient()
@@ -58,8 +67,15 @@ class Client():
     
 if __name__ == "__main__":
     client = Client(8080)
-    client.connectToServer()
-    client.sendDataToServer("lets see if this works...")
+    client.login()
+    # print (client.sendDataToServer("lets see if this works..."))
+    # time.sleep(3)
+    # client.sendDataToServer("trying again...")
+    # client.sendDataToServer("Again")
+    # time.sleep(5)
+    # client.sendDataToServer("Should not work")
+    # time.sleep(12)
+    # client.sendDataToServer("Should definitely not work")
     # client.welcome()
     # if (client.login()):
     #     client.handleRequests()

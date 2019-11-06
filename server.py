@@ -14,8 +14,8 @@ class Authorization():
             self.authdict[user] = passw
 
     def authorize(self, username, password):
-        if username in authdict.keys():
-            return authdict[username] == password
+        if username in self.authdict.keys():
+            return self.authdict[username] == password
 
     def createAccount(self, username, passw):
         f = open('credentials.txt', 'a')
@@ -61,20 +61,33 @@ class Server():
             recv_thread.daemon=True
             recv_thread.start()
 
-
-    def threadReciever(self, serverSocket, addr):
-        serverSocket.settimeout(10)
-        message = serverSocket.recv(2048)
-        #received data from the client, now we know who we are talking with
-        message = message.decode()
+    def threadSender(self, clientSocket, addr):
         #get lock as we might me accessing some shared data structures
         with self.lock:
             try:
-                print('Received request from', addr[0], 'listening at', addr[1], ':')
+                clientSocket.send("data")
             except socket.error:
                 print ('timed out')
             finally:
                 self.lock.notify()
+
+    def threadReciever(self, clientSocket, addr):
+        clientSocket.settimeout(1)
+        while (True):
+            try:
+                message = clientSocket.recv(2048)
+            except socket.timeout:
+                print ('timed out')
+                clientSocket.close()
+                return
+            #get lock as we might me accessing some shared data structures
+
+            if (message):
+                with self.lock:
+                    username, passw = message.decode().split()
+                    if (self.auth.authorize(username, passw)):
+                        clientSocket.send(b"Login Successful")
+                    self.lock.notify()
 
 
 
