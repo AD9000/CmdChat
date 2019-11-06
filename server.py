@@ -1,11 +1,11 @@
 import socket
 class Authorization():
-    authdict = {}
-    def loadAuth(self):
+    def __init__(self):
+        self.authdict = {}
         f = open('credentials.txt', 'r')
         for line in f:
             user, passw = line.split()
-            authdict[user] = passw
+            self.authdict[user] = passw
 
     def authorize(self, username, password):
         if username in authdict.keys():
@@ -20,3 +20,10 @@ class System():
         super().__init__()
         self.auth = Authorization()
         self.welcSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    def signup(self, username, passw):
+        self.auth.createAccount(username, passw)
+
+if __name__ == "__main__":
+    sys = System()
+    sys.signup("hi", "howru")
