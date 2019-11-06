@@ -3,13 +3,16 @@ import sys
 import signal
 
 class Client():
-    def __init__(self):
-        #Server would be running on the same host as Client
-        serverName = sys.argv[1]
-        serverPort = int(sys.argv[2])
+    def __init__(self, port):
 
+        # HARCODED VALUES!??
+        self.serverName = 'localhost'
+        self.serverPort = 12000
+
+
+        self.clientPort = port
         # Socket
-        clientSocket = socket(AF_INET, SOCK_STREAM)
+        self.clientSocket = socket(AF_INET, SOCK_STREAM)
 
         # Signal handler
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -25,15 +28,24 @@ class Client():
         message = username + " " + password
 
         # Try to log the user in:
-        response = sendDataToServer(message)
+        response = self.sendDataToServer(message)
+
+        print(response)
+    
+    def handleRequests(self):
+        while (True):
+            pass
+
+    def connectToServer(self):
+        self.clientSocket.connect((self.serverName, self.serverPort))
         
     def sendDataToServer(self, message):
         # Send message to the server
-        clientSocket.sendto(message.encode(), (self.serverName, self.serverPort))
+        self.clientSocket.send(message.encode())
 
         #wait for the reply from the server
-        receivedMessage, serverAddress = clientSocket.recvfrom(2048)
-        return receivedMessage
+        # receivedMessage, serverAddress = self.clientSocket.recvfrom(2048)
+        # return receivedMessage
 
     def signal_handler(self, sig, frame):
         self.endClient()
@@ -41,9 +53,13 @@ class Client():
 
     def endClient(self):
         # Close the socket
-        clientSocket.close()    
+        self.clientSocket.close()    
 
     
 if __name__ == "__main__":
-    client = Client()
-    client.loop()
+    client = Client(8080)
+    client.connectToServer()
+    client.sendDataToServer("lets see if this works...")
+    # client.welcome()
+    # if (client.login()):
+    #     client.handleRequests()
