@@ -10,9 +10,10 @@ import Intents
 class Server():
     def __init__(self, serverPort = 12000):
         super().__init__()
-        self.blockDuration = self.getBlockDuration(sys.argv)
-        if (not self.blockDuration):
-            print ('Usage: <Run Command> -block_duration <Block Duration>')
+        self.blockDuration = self.getBlockDuration(sys.argv, '-block_duration')
+        self.timeout = self.getTimeout(sys.argv, '-timeout')
+        if (not self.blockDuration or not self.timeout):
+            print ('Usage: <Run Command> -block_duration <Block Duration> -timeout <Timeout>')
             sys.exit(0)
         
         self.auth = Authorization(self.blockDuration)
@@ -32,11 +33,10 @@ class Server():
         self.timeout = False
 
     
-    def getBlockDuration(self, args):
+    def getCmdArg(self, args, argToFind):
         for arg in range(len(args)):
-            if args[arg] == '-block_duration':
+            if args[arg] == argToFind:
                 return args[arg + 1]
-
 
     def signal_handler(self, sig, frame):
         print("\nShutting down server...")
@@ -70,7 +70,7 @@ class Server():
                     connection.send(response.encode())
 
                     if (response == Intents.AUTH_SUCCESS):
-                        self.clients[connection] = username
+                        self.addData(connection, username, Intents.START_TIMER)
                         return True
 
 
@@ -83,6 +83,13 @@ class Server():
                 print (e)
                 print ('Invalid format!')
                 break
+    
+    def addData(self, connection, data, timer = None):
+        if (self.clients[connection]):
+            self.clients[connection] = data
+        if (timer):
+            connection.settimeout(timer)
+
 
     def logout(self, connection):
         self.auth.logout(self.clients[connection])
@@ -112,7 +119,6 @@ class Server():
 
     def handleConnection(self, connection, addr):
         # Connected to a client. Client then sends its intent. Server moves to handle this intent.
-
         # Get the intent
         intent = self.recieveData(connection)
 
@@ -122,7 +128,7 @@ class Server():
                 return
             self.login(connection)
         else:
-            connection.send(b'Send an intent to begin conversation')
+            # User cannot do anything else before logging in.
             self.safeSendData(connection, Intents.LOGIN_REJECT)
 
     def recvConnection(self):
