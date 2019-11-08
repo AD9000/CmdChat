@@ -4,27 +4,18 @@ import time
 import datetime as dt
 import signal
 import sys
-
-class Authorization():
-    def __init__(self):
-        self.authdict = {}
-        f = open('credentials.txt', 'r')
-        for line in f:
-            user, passw = line.split()
-            self.authdict[user] = passw
-
-    def authorize(self, username, password):
-        if username in self.authdict.keys():
-            return self.authdict[username] == password
-
-    def createAccount(self, username, passw):
-        f = open('credentials.txt', 'a')
-        f.write(username + ' ' + passw)
+from Authorization import Authorization
+import Intents
 
 class Server():
     def __init__(self, serverPort = 12000):
         super().__init__()
-        self.auth = Authorization()
+        self.blockDuration = self.getBlockDuration(sys.argv)
+        if (not self.blockDuration):
+            print ('Usage: <Run Command> -block_duration <Block Duration>')
+            sys.exit(0)
+        
+        self.auth = Authorization(self.blockDuration)
         self.welcSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.welcSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.welcSocket.bind(('localhost', serverPort))
@@ -33,12 +24,18 @@ class Server():
         # Signal handler
         signal.signal(signal.SIGINT, self.signal_handler)
 
+
         # Yet to figure out the use for these
-        self.clients = []
         self.Update_Interval = 1
         self.timeout = False
 
     
+    def getBlockDuration(self, args):
+        for arg in range(len(args)):
+            if args[arg] == '-block_duration':
+                return args[arg + 1]
+
+
     def signal_handler(self, sig, frame):
         print("\nShutting down server...")
         self.welcSocket.close()
@@ -48,16 +45,70 @@ class Server():
     def signup(self, username, passw):
         self.auth.createAccount(username, passw)
 
+    def login(self, connection):
+        # recieve data in a loop
+        while (True):
+            try:
+                # Get the login details from the client
+                loginDetails = self.recieveData(connection)
+                username, passw = loginDetails.split()
+
+                # Authorize the client. If it works, send the response back
+                response = self.auth.authorize(username, passw)
+                print ('Auth response: ------> ', response)
+
+                print (loginDetails)
+                print (username, passw)
+
+                if (not response):
+                    connection.send(b'Internal Server Error')
+                else:
+                    print ('sending the response back to the clients')
+                    connection.send(response.encode())
+
+            except socket.timeout:
+                print ('Internal Server Error: Timeout')
+                break
+            except Exception as e:
+                print (loginDetails)
+                print (username, passw)
+                print (e)
+                print ('Invalid format!')
+                break
+    
+    def safeSendData(self, connection, message):
+        try:
+            connection.send(message.encode())
+            return True
+        except:
+            connection.close()
+            return False
+
+    def handleConnection(self, connection, addr):
+        # Connected to a client. Client then sends its intent. Server moves to handle this intent.
+
+        # Get the intent
+        intent = self.recieveData(connection)
+
+        # If intent is to login, then log the user in
+        if (intent == Intents.LOGIN_USER):
+            if (not self.safeSendData(connection, Intents.LOGIN_ACCEPT)):
+                return
+            self.login(connection)
+        else:
+            connection.send(b'Send an intent to begin conversation')
+            self.safeSendData(connection, Intents.LOGIN_REJECT)
+
     def recvConnection(self):
         # Listen for incoming connections
-        self.welcSocket.listen(5)
+        self.welcSocket.listen()
 
         while(1):
             print('Waiting for connections...')
             connection, addr = self.welcSocket.accept()
             
             # Create new thread to handle the connection...
-            recv_thread=threading.Thread(name="RecvHandler", target=self.threadReciever, args=[connection, addr])
+            recv_thread=threading.Thread(name="ClientHandler", target=self.handleConnection, args=[connection, addr])
             recv_thread.daemon=True
             recv_thread.start()
 
@@ -71,23 +122,33 @@ class Server():
             finally:
                 self.lock.notify()
 
+    def recieveData(self, clientSocket):
+        return clientSocket.recv(2048).decode()
+
     def threadReciever(self, clientSocket, addr):
-        clientSocket.settimeout(1)
         while (True):
+            message = None
             try:
                 message = clientSocket.recv(2048)
             except socket.timeout:
                 print ('timed out')
                 clientSocket.close()
-                return
-            #get lock as we might me accessing some shared data structures
+                break
 
+            #get lock as we might me accessing some shared data structures
             if (message):
-                with self.lock:
+                print (message)
+                try:
+                    # Get data from the message
                     username, passw = message.decode().split()
-                    if (self.auth.authorize(username, passw)):
-                        clientSocket.send(b"Login Successful")
-                    self.lock.notify()
+                    # print ('authorizing...')
+                    response = self.auth.authorize(username, passw)
+                    # print ("got response")
+                    clientSocket.send(response.encode())
+                    print ('done!')
+                    break
+                except:
+                    return 'Invalid Message'
 
 
 
