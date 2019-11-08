@@ -24,6 +24,8 @@ class Server():
         # Signal handler
         signal.signal(signal.SIGINT, self.signal_handler)
 
+        # Clients and their sockets
+        self.clients = {}
 
         # Yet to figure out the use for these
         self.Update_Interval = 1
@@ -50,8 +52,9 @@ class Server():
         while (True):
             try:
                 # Get the login details from the client
+                print('starting again...')
                 loginDetails = self.recieveData(connection)
-                username, passw = loginDetails.split()
+                username, passw = [x.strip() for x in loginDetails.split()]
 
                 # Authorize the client. If it works, send the response back
                 response = self.auth.authorize(username, passw)
@@ -66,6 +69,11 @@ class Server():
                     print ('sending the response back to the clients')
                     connection.send(response.encode())
 
+                    if (response == Intents.AUTH_SUCCESS):
+                        self.clients[connection] = username
+                        return True
+
+
             except socket.timeout:
                 print ('Internal Server Error: Timeout')
                 break
@@ -75,6 +83,12 @@ class Server():
                 print (e)
                 print ('Invalid format!')
                 break
+
+    def logout(self, connection):
+        self.auth.logout(self.clients[connection])
+        self.clients.pop(connection, None)
+        if connection.fileno() != -1:
+            connection.close()
     
     def safeSendData(self, connection, message):
         try:
@@ -83,6 +97,18 @@ class Server():
         except:
             connection.close()
             return False
+
+    def recieveData(self, clientSocket):
+        return clientSocket.recv(2048).decode()
+
+    def safeRecieveData(self, connection):
+        try:
+            data = connection.recv(8192).decode()
+            if (data == Intents.LOGOUT):
+                self.logout()
+            return data
+        except:
+            self.logout()
 
     def handleConnection(self, connection, addr):
         # Connected to a client. Client then sends its intent. Server moves to handle this intent.
@@ -122,9 +148,7 @@ class Server():
             finally:
                 self.lock.notify()
 
-    def recieveData(self, clientSocket):
-        return clientSocket.recv(2048).decode()
-
+    
     def threadReciever(self, clientSocket, addr):
         while (True):
             message = None

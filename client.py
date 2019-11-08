@@ -83,8 +83,13 @@ class Client():
     
 if __name__ == "__main__":
     client = Client(8080)
+
+    # Client is welcomed
     client.welcome()
+
+    # Must login before using anything.
     client.login()
+
     # print (client.sendDataToServer("lets see if this works..."))
     # time.sleep(3)
     # client.sendDataToServer("trying again...")

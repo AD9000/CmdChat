@@ -1,5 +1,6 @@
 import threading
 import time
+import Intents
 class Authorization():
     def __init__(self, blockDuration):
         self.blockDuration = int(blockDuration)
@@ -41,12 +42,14 @@ class Authorization():
                         return "Invalid Password"
                         
                 else:
-                    print ('ok....')
-                    loginT = threading.Thread(target=self.login, args=[username])
-                    loginT.daemon=True
-                    loginT.start()
-                    return "Login Successful"
-
+                    if username in self.clients:
+                        return 'A user with that username has already logged in.'
+                    else:
+                        print ('ok....')
+                        loginT = threading.Thread(target=self.login, args=[username])
+                        loginT.daemon=True
+                        loginT.start()
+                        return Intents.AUTH_SUCCESS
             elif username in self.blockedClients:
                 return 'You have been blocked. Try again later'
             else:
@@ -56,6 +59,13 @@ class Authorization():
         with self.lock:
             self.clients.append(user)
             self.invalidCount[user] = 0
+            self.lock.notify()
+    
+    def logout(self, user):
+        with self.lock:
+            if (user not in self.clients):
+                return
+            self.clients.remove(user)
             self.lock.notify()
     
     def blockClient(self, client):
