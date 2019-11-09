@@ -105,7 +105,7 @@ class Server():
             else:
                 return False
         except Exception as e:
-            # print ('Exception checking socket ---> ', e)
+            print ('Exception checking socket ---> ', e)
             return False
 
 
@@ -216,6 +216,15 @@ class Server():
                         break
         
         # Do nothing if the client is not logged in
+
+    '''
+    Return the list of users who are currently online:
+    '''
+    def usersCurrentlyOnline(self):
+        if (self.clients):
+            with self.lock:
+                return [self.clients[conn][Data.USERNAME] for conn in self.clients.keys]
+        return []
 
     def handleConnection(self, connection, addr):
         # Connected to a client. Client then sends its intent. Server moves to handle this intent.
