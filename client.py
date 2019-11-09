@@ -1,7 +1,8 @@
-from socket import *
+import socket
 import sys
 import signal
 import time
+import threading
 import Intents
 
 class Client():
@@ -14,7 +15,7 @@ class Client():
 
         self.clientPort = port
         # Socket
-        self.clientSocket = socket(AF_INET, SOCK_STREAM)
+        self.clientSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # Signal handler
         signal.signal(signal.SIGINT, self.signal_handler)
 
@@ -38,7 +39,8 @@ class Client():
             # Try to log the user in:
             response = self.sendDataToServer(message)
             if (response == b'Login Successful'):
-                break
+                self.onConnected()
+                return True
             else:
                 if (response):
                     print(response.decode())
@@ -46,9 +48,52 @@ class Client():
                     print ('Internal Server Error')
                     self.endClient(1)
     
-    def handleRequests(self):
+    def onConnected(self):
+        # Thread to recieve data
+        recv_thread=threading.Thread(target=self.safeRecieveData)
+        recv_thread.daemon=True
+        recv_thread.start()
+
+    # def handleClose(self, connection):
+    #     while (True):
+    #         if (connection.fileno() == -1):
+    #             print ('Server closed connection unexpectedly')
+    #             self.endClient(1)
+    #         time.sleep(1)
+    #         print(connection.fileno())
+
+
+    def handleCommands(self):
         while (True):
-            pass
+            input()
+
+    def safeRecieveData(self):
+        while (True):
+            self.clientSocket.settimeout(2)
+            try:
+                # print ('recieving data')
+                message = self.clientSocket.recv(2048)
+
+                # logout if needed
+                if (message.decode() == Intents.LOGOUT):
+                    self.logout()
+
+                # otherwise print the reponse out
+                print (message.decode())
+
+                # Reset timeout
+                self.clientSocket.settimeout(None)
+
+                time.sleep(1)
+            except socket.timeout:
+                print ('timedout')
+                continue
+            except Exception as e:
+                print ('Exception while recieving data ---> ', e)
+                break
+    
+    def logout(self):
+        self.endClient(0)
 
     def handleTimeout(self):
         pass
@@ -59,14 +104,12 @@ class Client():
     def sendDataToServer(self, message):
         # Send message to the server
         try:
-            if self.clientSocket.fileno != -1:
-                print ('----sending data-------->')
+            if self.clientSocket.fileno() != -1:
                 self.clientSocket.send(message.encode())
                 #wait for the reply from the server
-                print ('<---------recieving data----')
                 recievedMessage = self.clientSocket.recv(2048)
                 return recievedMessage
-        except timeout:
+        except socket.timeout:
             print ('Connection timed out')
             self.clientSocket.close()
         except Exception as e:
@@ -88,7 +131,9 @@ if __name__ == "__main__":
     client.welcome()
 
     # Must login before using anything.
-    client.login()
+    if (client.login()):
+        client.handleCommands()
+
 
     # print (client.sendDataToServer("lets see if this works..."))
     # time.sleep(3)

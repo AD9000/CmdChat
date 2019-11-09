@@ -1,0 +1,2 @@
+USERNAME='username'
+TIMEOUT='timeout'

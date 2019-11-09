@@ -6,12 +6,15 @@ import signal
 import sys
 from Authorization import Authorization
 import Intents
+import Data
+import select
 
 class Server():
     def __init__(self, serverPort = 12000):
         super().__init__()
-        self.blockDuration = self.getBlockDuration(sys.argv, '-block_duration')
-        self.timeout = self.getTimeout(sys.argv, '-timeout')
+        self.blockDuration = int(self.getCmdArg(sys.argv, '-block_duration'))
+        self.timeout = int(self.getCmdArg(sys.argv, '-timeout'))
+        print(str(self.timeout), " ", str(self.blockDuration))
         if (not self.blockDuration or not self.timeout):
             print ('Usage: <Run Command> -block_duration <Block Duration> -timeout <Timeout>')
             sys.exit(0)
@@ -30,7 +33,6 @@ class Server():
 
         # Yet to figure out the use for these
         self.Update_Interval = 1
-        self.timeout = False
 
     
     def getCmdArg(self, args, argToFind):
@@ -67,10 +69,17 @@ class Server():
                     connection.send(b'Internal Server Error')
                 else:
                     print ('sending the response back to the clients')
+                    print (response)
                     connection.send(response.encode())
+                    print ('response sent')
 
                     if (response == Intents.AUTH_SUCCESS):
-                        self.addData(connection, username, Intents.START_TIMER)
+                        print ('yes indeed')
+                        self.addClient(connection, username)
+                        print ('starting timemout thread...')
+                        # Begin thread to timeout the user after the
+                        # required number of seconds
+                        self.startThread(self.userTimeout, True, [connection])
                         return True
 
 
@@ -79,30 +88,94 @@ class Server():
                 break
             except Exception as e:
                 print (loginDetails)
-                print (username, passw)
+                # print (username, passw)
                 print (e)
-                print ('Invalid format!')
+                if (self.checksocket(connection)):
+                    print ('unexpected client closure')
+                    self.logout(connection)
+                else:
+                    print ('Invalid format!')
                 break
     
-    def addData(self, connection, data, timer = None):
-        if (self.clients[connection]):
-            self.clients[connection] = data
-        if (timer):
-            connection.settimeout(timer)
+    def checksocket(self, connection):
+        try:
+            ret = select.select([connection], [], [], 0.5)
+            if (connection in ret[0]):
+                return True
+            else:
+                return False
+        except Exception as e:
+            # print ('Exception checking socket ---> ', e)
+            return False
 
+
+    def broadcast(self, message):
+        print (message)
+        if (not message):
+            return
+        print (self.clients)
+        
+        with self.lock:
+            for client in self.clients.keys():
+                try:
+                    print(client)
+                    client.send(message.encode())
+                    print ('broadcast sent')
+                except socket.timeout:
+                    self.logout(client)
+                except Exception as e:
+                    print ('exception while broadcasting ----> ' + str(e))
+
+    def startThread(self, targetFunc, daemon, arguments):
+        # Create new thread.
+        newthread=threading.Thread(target=targetFunc, args=arguments)
+        newthread.daemon=daemon
+        newthread.start()
+        return newthread
+
+    def addClient(self, connection, username):
+        # Assuming that the client is not logged in yet
+        # send broadCast
+        self.broadcast(username + ' has joined.')
+        with self.lock:
+            print ('got lock')
+            self.clients[connection] = {}
+            self.clients[connection][Data.USERNAME] = username
+            print ('added user ' + str(self.timeout))
+            self.clients[connection][Data.TIMEOUT] = int(self.timeout)
+
+    def addData(self, connection, tag, data):
+        with self.lock:
+            if (self.clients and self.clients[connection]):
+                self.clients[connection][tag] = data
+
+    def resetTimeout(self, connection):
+        with self.lock:
+            if (self.clients and self.clients[connection]):
+                self.clients[connection][Data.TIMEOUT] = self.timeout
 
     def logout(self, connection):
-        self.auth.logout(self.clients[connection])
+        if (connection not in self.clients.keys()):
+            return
+        print ('logging user out ', self.clients[connection])
+        self.auth.logout(self.clients[connection][Data.USERNAME])
         self.clients.pop(connection, None)
+
+        # Send the user logout message
+        while not (self.isClosed(connection) or self.safeSendData(connection, Intents.LOGOUT)):
+            pass
+        
         if connection.fileno() != -1:
             connection.close()
+            print (connection.fileno())
     
     def safeSendData(self, connection, message):
         try:
             connection.send(message.encode())
             return True
         except:
-            connection.close()
+            if (not self.isClosed(connection)):
+                connection.close()
             return False
 
     def recieveData(self, clientSocket):
@@ -116,6 +189,33 @@ class Server():
             return data
         except:
             self.logout()
+    
+    def isClosed(self, connection):
+        return connection.fileno == -1
+
+    '''
+    Log the client out if he/she does not issue a command in self.timeout seconds
+    '''
+    def userTimeout(self, connection):
+        # Decrement inside loop
+        while True:
+            # Wait for 1 second
+            time.sleep(1)
+
+            # Check if user timed out
+            with self.lock:
+                if (self.clients and self.clients[connection]):
+                    if (self.clients[connection][Data.TIMEOUT]):
+                        self.clients[connection][Data.TIMEOUT] -= 1
+                        if self.clients[connection][Data.TIMEOUT] == 0:
+                            self.logout(connection)
+                            break
+                    else:
+                        # Client does not have a timeout. Log him out!
+                        self.logout(connection)
+                        break
+        
+        # Do nothing if the client is not logged in
 
     def handleConnection(self, connection, addr):
         # Connected to a client. Client then sends its intent. Server moves to handle this intent.
