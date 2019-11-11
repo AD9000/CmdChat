@@ -4,6 +4,7 @@ import signal
 import time
 import threading
 import Intents
+import select
 
 class Client():
     def __init__(self, port):
@@ -12,12 +13,16 @@ class Client():
         self.serverName = 'localhost'
         self.serverPort = 12000
 
+        self.isLoggedIn = False
+
 
         self.clientPort = port
         # Socket
         self.clientSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # Signal handler
         signal.signal(signal.SIGINT, self.signal_handler)
+
+        self.lock = threading.Condition()
 
     def welcome(self):
         print("Welcome to CmdChat. Finally you get to talk to your friends through the best UI ever: The command line! *Fireworks in background*")
@@ -49,10 +54,13 @@ class Client():
                     self.endClient(1)
     
     def onConnected(self):
+        self.isLoggedIn = True
         # Thread to recieve data
-        recv_thread=threading.Thread(target=self.safeRecieveData)
+        recv_thread=threading.Thread(target=self.handleCommands)
         recv_thread.daemon=True
         recv_thread.start()
+
+        self.safeRecieveData()
 
     # def handleClose(self, connection):
     #     while (True):
@@ -67,6 +75,24 @@ class Client():
         while (True):
             input()
 
+    def checksocket(self):
+        while True:
+            try:
+                ret = select.select([self.clientSocket], [], [], 5)
+                
+                print(ret)
+                if (self.clientSocket in ret[0]):
+                    print ('was readable')
+                    continue
+                else:
+                    print ('nope')
+                    self.logout()
+                    break
+                print(ret)
+            except Exception as e:
+                print ('Exception checking socket ---> ', e)
+                break
+
     def safeRecieveData(self):
         while (True):
             self.clientSocket.settimeout(2)
@@ -76,6 +102,7 @@ class Client():
 
                 # logout if needed
                 if (message.decode() == Intents.LOGOUT):
+                    print (self.clientSocket.recv(2048).decode())
                     self.logout()
 
                 # otherwise print the reponse out
@@ -84,15 +111,15 @@ class Client():
                 # Reset timeout
                 self.clientSocket.settimeout(None)
 
-                time.sleep(1)
+                time.sleep(2)
             except socket.timeout:
-                print ('timedout')
                 continue
             except Exception as e:
                 print ('Exception while recieving data ---> ', e)
                 break
     
     def logout(self):
+        print('Exiting...')
         self.endClient(0)
 
     def handleTimeout(self):
@@ -120,8 +147,11 @@ class Client():
 
     def endClient(self, exitCode = 0):
         # Close the socket
-        self.clientSocket.close()   
-        sys.exit(exitCode) 
+        if self.clientSocket.fileno() != -1:
+            self.clientSocket.close()   
+
+        # done
+        sys.exit(exitCode)
 
     
 if __name__ == "__main__":

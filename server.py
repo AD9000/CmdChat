@@ -154,21 +154,31 @@ class Server():
             if (self.clients and self.clients[connection]):
                 self.clients[connection][Data.TIMEOUT] = self.timeout
 
-    def logout(self, connection):
+    def logout(self, connection, additionalMessage=None):
         if (connection not in self.clients.keys()):
             return
+
         print ('logging user out ', self.clients[connection])
         self.auth.logout(self.clients[connection][Data.USERNAME])
         self.clients.pop(connection, None)
 
         # Send the user logout message
-        while not (self.isClosed(connection) or self.safeSendData(connection, Intents.LOGOUT)):
-            pass
-        
+        self.safeSendData(connection, Intents.LOGOUT)
+        time.sleep(0.1)
+        if (additionalMessage):
+            self.sendData(connection, additionalMessage)
+
         if connection.fileno() != -1:
+            # print ('')
             connection.close()
             print (connection.fileno())
+
+        # end the current thread
+        # sys.exit(0)
     
+    def sendData(self, connection, message):
+        connection.send(message.encode())
+
     def safeSendData(self, connection, message):
         try:
             connection.send(message.encode())
@@ -208,7 +218,7 @@ class Server():
                     if (self.clients[connection][Data.TIMEOUT]):
                         self.clients[connection][Data.TIMEOUT] -= 1
                         if self.clients[connection][Data.TIMEOUT] == 0:
-                            self.logout(connection)
+                            self.logout(connection, 'You have been automatically logged out due to inactivity')
                             break
                     else:
                         # Client does not have a timeout. Log him out!
