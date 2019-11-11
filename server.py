@@ -8,6 +8,7 @@ from Authorization import Authorization
 import Intents
 import Data
 import select
+import datetime
 
 class Server():
     def __init__(self, serverPort = 12000):
@@ -76,10 +77,10 @@ class Server():
                     if (response == Intents.AUTH_SUCCESS):
                         print ('yes indeed')
                         self.addClient(connection, username)
-                        print ('starting timemout thread...')
+                        print ('starting timeout thread...')
                         # Begin thread to timeout the user after the
                         # required number of seconds
-                        self.startThread(self.userTimeout, True, [connection])
+                        self.startThread(self.userTimeout, True, [username])
                         return True
 
 
@@ -87,7 +88,7 @@ class Server():
                 print ('Internal Server Error: Timeout')
                 break
             except Exception as e:
-                print (loginDetails)
+                print ('exception during client login-----> ', loginDetails)
                 # print (username, passw)
                 print (e)
                 if (self.checksocket(connection)):
@@ -137,30 +138,48 @@ class Server():
         # Assuming that the client is not logged in yet
         # send broadCast
         self.broadcast(username + ' has joined.')
-        with self.lock:
-            print ('got lock')
-            self.clients[connection] = {}
-            self.clients[connection][Data.USERNAME] = username
-            print ('added user ' + str(self.timeout))
-            self.clients[connection][Data.TIMEOUT] = int(self.timeout)
+        # with self.lock:
+        #     print ('got lock')
+        if username not in self.clients.keys():
+            self.clients[username] = {}
 
-    def addData(self, connection, tag, data):
-        with self.lock:
-            if (self.clients and self.clients[connection]):
-                self.clients[connection][tag] = data
+        # Store the username
+        self.addData(username, Data.USERNAME, username)
 
-    def resetTimeout(self, connection):
-        with self.lock:
-            if (self.clients and self.clients[connection]):
-                self.clients[connection][Data.TIMEOUT] = self.timeout
+        # Store the connection socket
+        self.addData(username, Data.CONNECTION, connection)
+        
+        # set the isloggedin flag
+        self.addData(username, Data.IS_LOGGED_IN, True)
 
-    def logout(self, connection, additionalMessage=None):
-        if (connection not in self.clients.keys()):
+        # store/update the last login time
+        self.addData(username, Data.LAST_LOGIN_TIME, datetime.datetime.now())
+
+        # init a timeout for logging the user out
+        self.addData(username, Data.TIMEOUT, int(self.timeout))
+
+        print('done adding data')
+
+    def addData(self, username, tag, data):
+        with self.lock:
+            if (username in self.clients):
+                self.clients[username][tag] = data
+
+    def resetTimeout(self, username):
+        with self.lock:
+            if (self.clients and self.clients[username]):
+                self.clients[username][Data.TIMEOUT] = self.timeout
+
+    def logout(self, username, additionalMessage=None):
+        if (username not in self.clients.keys()):
             return
 
-        print ('logging user out ', self.clients[connection])
-        self.auth.logout(self.clients[connection][Data.USERNAME])
-        self.clients.pop(connection, None)
+        connection = self.clients[username][Data.CONNECTION]
+
+        print ('logging user out ', self.clients[username])
+        self.auth.logout(self.clients[username][Data.CONNECTION])
+        self.clients[username][Data.IS_LOGGED_IN] = False
+        self.clients[username][Data.LAST_LOGOUT_TIME] = datetime.datetime.now()
 
         # Send the user logout message
         self.safeSendData(connection, Intents.LOGOUT)
@@ -172,6 +191,8 @@ class Server():
             # print ('')
             connection.close()
             print (connection.fileno())
+        
+        print(self.clients[username])
 
         # end the current thread
         # sys.exit(0)
@@ -206,23 +227,24 @@ class Server():
     '''
     Log the client out if he/she does not issue a command in self.timeout seconds
     '''
-    def userTimeout(self, connection):
+    def userTimeout(self, username):
         # Decrement inside loop
         while True:
+            print ('waiting...', username)
             # Wait for 1 second
             time.sleep(1)
 
             # Check if user timed out
             with self.lock:
-                if (self.clients and self.clients[connection]):
-                    if (self.clients[connection][Data.TIMEOUT]):
-                        self.clients[connection][Data.TIMEOUT] -= 1
-                        if self.clients[connection][Data.TIMEOUT] == 0:
-                            self.logout(connection, 'You have been automatically logged out due to inactivity')
+                if (username in self.clients):
+                    if (self.clients[username][Data.TIMEOUT]):
+                        self.clients[username][Data.TIMEOUT] -= 1
+                        if self.clients[username][Data.TIMEOUT] == 0:
+                            self.logout(username, 'You have been automatically logged out due to inactivity')
                             break
                     else:
                         # Client does not have a timeout. Log him out!
-                        self.logout(connection)
+                        self.logout(username)
                         break
         
         # Do nothing if the client is not logged in
@@ -233,8 +255,23 @@ class Server():
     def usersCurrentlyOnline(self):
         if (self.clients):
             with self.lock:
-                return [self.clients[conn][Data.USERNAME] for conn in self.clients.keys]
+                return [self.clients[user][Data.CONNECTION] for user in self.clients.keys]
         return []
+
+    '''
+    History: Provides the list of all users online within the given time (in seconds)
+    '''
+    def userOnlineHistory(self, time):
+        users = []
+        with self.lock:
+            for conn in self.clients.values():
+                # if the user is logged in, add him
+                if conn[Data.IS_LOGGED_IN]:
+                    users.append(conn[Data.USERNAME])
+                else:
+                    if conn[Data.LAST_LOGOUT_TIME] > datetime.datetime.now() - datetime.timedelta(seconds=time):
+                        users.append(conn[Data.USERNAME])
+
 
     def handleConnection(self, connection, addr):
         # Connected to a client. Client then sends its intent. Server moves to handle this intent.
@@ -371,5 +408,6 @@ class Server():
 #     time.sleep(0.1)
 
 if __name__ == "__main__":
+    # print(datetime.datetime.now() - datetime.timedelta(minutes=10))
     server = Server()
     server.recvConnection()

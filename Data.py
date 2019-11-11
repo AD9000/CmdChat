@@ -1,2 +1,6 @@
 USERNAME='username'
 TIMEOUT='timeout'
+IS_LOGGED_IN='isLoggedIn'
+LAST_LOGIN_TIME='lastLoginTime'
+LAST_LOGOUT_TIME='lastLogoutTime'
+CONNECTION='connectionsocket'
