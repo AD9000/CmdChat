@@ -11,15 +11,12 @@ import select
 import datetime
 
 class Server():
-    def __init__(self, serverPort = 12000):
-        super().__init__()
-        self.blockDuration = int(self.getCmdArg(sys.argv, '-block_duration'))
-        self.timeout = int(self.getCmdArg(sys.argv, '-timeout'))
-        print(str(self.timeout), " ", str(self.blockDuration))
-        if (not self.blockDuration or not self.timeout):
-            print ('Usage: <Run Command> -block_duration <Block Duration> -timeout <Timeout>')
-            sys.exit(0)
-        
+    def __init__(self, serverPort = 12000, blockDuration=10, timeout=1000):
+        super().__init__()        
+
+        self.blockDuration = blockDuration
+        self.timeout = timeout
+
         self.auth = Authorization(self.blockDuration)
         self.welcSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.welcSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -36,10 +33,11 @@ class Server():
         self.Update_Interval = 1
 
     
-    def getCmdArg(self, args, argToFind):
-        for arg in range(len(args)):
-            if args[arg] == argToFind:
-                return args[arg + 1]
+    # def getCmdArg(self, args, argToFind):
+    #     for arg in range(len(args)):
+    #         if args[arg] == argToFind:
+    #             return args[arg + 1]
+
 
     def signal_handler(self, sig, frame):
         print("\nShutting down server...")
@@ -81,7 +79,7 @@ class Server():
                         # Begin thread to timeout the user after the
                         # required number of seconds
                         self.startThread(self.userTimeout, True, [username])
-                        return True
+                        return username
 
 
             except socket.timeout:
@@ -195,7 +193,7 @@ class Server():
         print(self.clients[username])
 
         # end the current thread
-        # sys.exit(0)
+        self.endSession(0)
     
     def sendData(self, connection, message):
         connection.send(message.encode())
@@ -230,7 +228,7 @@ class Server():
     def userTimeout(self, username):
         # Decrement inside loop
         while True:
-            print ('waiting...', username)
+            # print ('waiting...', username)
             # Wait for 1 second
             time.sleep(1)
 
@@ -240,7 +238,7 @@ class Server():
                     if (self.clients[username][Data.TIMEOUT]):
                         self.clients[username][Data.TIMEOUT] -= 1
                         if self.clients[username][Data.TIMEOUT] == 0:
-                            self.logout(username, 'You have been automatically logged out due to inactivity')
+                            self.logout(username, '\n\nYou have been automatically logged out due to inactivity')
                             break
                     else:
                         # Client does not have a timeout. Log him out!
@@ -272,17 +270,38 @@ class Server():
                     if conn[Data.LAST_LOGOUT_TIME] > datetime.datetime.now() - datetime.timedelta(seconds=time):
                         users.append(conn[Data.USERNAME])
 
+    '''
+    Message Forwarding: Server recieves a message from a client and then forwards it over to the recipient
+    '''
+    def messageForwarding(self):
+        # TODO: To be implemented
+        pass
 
+    '''
+    Ends the current session with the client
+    Note: The server can still accept new clients after this operation
+    '''
+    def endSession(self, exitCode=0):
+        sys.exit(exitCode)
+
+    '''
+    Handles an incoming connection
+    '''
     def handleConnection(self, connection, addr):
         # Connected to a client. Client then sends its intent. Server moves to handle this intent.
         # Get the intent
         intent = self.recieveData(connection)
+        check = False
 
         # If intent is to login, then log the user in
         if (intent == Intents.LOGIN_USER):
-            if (not self.safeSendData(connection, Intents.LOGIN_ACCEPT)):
-                return
-            self.login(connection)
+            username = self.login(connection)
+            if not username:
+                # End session immediately
+                self.endSession()
+
+            elif (not self.safeSendData(connection, Intents.LOGIN_ACCEPT)):
+                self.logout(self.clients[username])
         else:
             # User cannot do anything else before logging in.
             self.safeSendData(connection, Intents.LOGIN_REJECT)
@@ -407,7 +426,22 @@ class Server():
 # while True:
 #     time.sleep(0.1)
 
+def getCmdArg(index):
+    if index < len(sys.argv) and sys.argv[index]:
+        return int(sys.argv[index])
+
+def usage():
+    print ('Usage: python3 server.py <Port Number> <Block Duration> <Timeout>')
+    sys.exit(0)
+
 if __name__ == "__main__":
     # print(datetime.datetime.now() - datetime.timedelta(minutes=10))
-    server = Server()
+    serverPort = getCmdArg(1)
+    blockDuration = getCmdArg(2)
+    timeout = getCmdArg(3)
+
+    if (not (serverPort or blockDuration or timeout)):
+        usage()
+
+    server = Server(serverPort, blockDuration, timeout)
     server.recvConnection()

@@ -7,22 +7,20 @@ import Intents
 import select
 
 class Client():
-    def __init__(self, port):
-
-        # HARCODED VALUES!??
-        self.serverName = 'localhost'
-        self.serverPort = 12000
+    def __init__(self, serverIP, serverPort):
+        self.serverIP = serverIP
+        self.serverPort = serverPort
 
         self.isLoggedIn = False
 
-
-        self.clientPort = port
         # Socket
         self.clientSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # Signal handler
         signal.signal(signal.SIGINT, self.signal_handler)
 
         self.lock = threading.Condition()
+
+        self.supportedCommands = {'message': self.serverMessage}
 
     def welcome(self):
         print("Welcome to CmdChat. Finally you get to talk to your friends through the best UI ever: The command line! *Fireworks in background*")
@@ -70,10 +68,19 @@ class Client():
     #         time.sleep(1)
     #         print(connection.fileno())
 
+    def safeSendAll(self, messages, timeout):
+        for message in messages:
+            self.clientSocket.send(message)
+            time.sleep(timeout)
+
+    def serverMessage(self, user, message):
+        self.safeSendAll([Intents.MESSAGE, user, message], 1)
 
     def handleCommands(self):
         while (True):
-            input()
+            command = input("$ ")
+
+
 
     def checksocket(self):
         while True:
@@ -111,7 +118,7 @@ class Client():
                 # Reset timeout
                 self.clientSocket.settimeout(None)
 
-                time.sleep(2)
+                time.sleep(1)
             except socket.timeout:
                 continue
             except Exception as e:
@@ -126,7 +133,7 @@ class Client():
         pass
 
     def connectToServer(self, timeoutT):
-        self.clientSocket.connect((self.serverName, self.serverPort))
+        self.clientSocket.connect((self.serverIP, self.serverPort))
 
     def sendDataToServer(self, message):
         # Send message to the server
@@ -153,9 +160,22 @@ class Client():
         # done
         sys.exit(exitCode)
 
-    
+def getCmdArg(index):
+    if index < len(sys.argv) and sys.argv[index]:
+        return sys.argv[index]
+
+def usage():
+    print ('Usage: python3 client.py <Server Ip Address> <Server Port No>')
+    sys.exit(0)
+
 if __name__ == "__main__":
-    client = Client(8080)
+    serverIP = getCmdArg(1)
+    serverPort = int(getCmdArg(2))
+
+    if (not (serverPort or serverIP)):
+        usage()
+
+    client = Client(serverIP, serverPort)
 
     # Client is welcomed
     client.welcome()
