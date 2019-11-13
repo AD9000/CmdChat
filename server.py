@@ -29,6 +29,9 @@ class Server():
         # Clients and their sockets
         self.clients = {}
 
+        # Commands supported by the server
+        self.supportedCommands = {Intents.MESSAGE: self.publicMessage}
+
         # Yet to figure out the use for these
         self.Update_Interval = 1
 
@@ -49,12 +52,12 @@ class Server():
         self.auth.createAccount(username, passw)
 
     def login(self, connection):
-        # recieve data in a loop
+        # receive data in a loop
         while (True):
             try:
                 # Get the login details from the client
                 print('starting again...')
-                loginDetails = self.recieveData(connection)
+                loginDetails = self.receiveData(connection)
                 username, passw = [x.strip() for x in loginDetails.split()]
 
                 # Authorize the client. If it works, send the response back
@@ -208,17 +211,18 @@ class Server():
             self.unexpectedClientClosure()
             return False
 
-    def recieveData(self, clientSocket):
+    def receiveData(self, clientSocket):
         return clientSocket.recv(2048).decode()
 
-    def safeRecieveData(self, connection):
+    def safeReceiveData(self, connection):
         try:
             data = connection.recv(8192).decode()
             if (data == Intents.LOGOUT):
                 self.logout()
             return data
-        except:
-            self.logout()
+        except socket.error or IOError:
+            self.unexpectedClientClosure()
+            return False
     
     def isClosed(self, connection):
         return connection.fileno == -1
@@ -272,7 +276,7 @@ class Server():
                         users.append(conn[Data.USERNAME])
 
     '''
-    Message Forwarding: Server recieves a message from a client and then forwards it over to the recipient
+    Message Forwarding: Server receives a message from a client and then forwards it over to the recipient
     '''
     def messageForwarding(self):
         # TODO: To be implemented
@@ -293,8 +297,9 @@ class Server():
     def handleConnection(self, connection, addr):
         # Connected to a client. Client then sends its intent. Server moves to handle this intent.
         # Get the intent
-        intent = self.recieveData(connection)
+        intent = self.receiveData(connection)
         check = False
+        username = None
 
         # If intent is to login, then log the user in
         if (intent == Intents.LOGIN_USER):
@@ -310,14 +315,31 @@ class Server():
             # User cannot do anything else before logging in.
             self.safeSendData(connection, Intents.LOGIN_REJECT)
 
+        # The fact that there is a username means that login was successful
+        if (not username):
+            self.endSession(0, connection)
+
         # At this point the user is logged in. Now to handle any other commands that the user issues.
-        # Dont worry about the timeout. Thats what the 
+        # Dont worry about the timeout. Thats what the usertimeout is for
+        while (True):
+            command = self.safeReceiveData(connection)
+
+            # If command does not exist or is False (there was an error) log user out
+            if (not command):
+                # log the user out
+                self.logout(username)
+
+            # Check if the command is supported
+            if (command not in self.supportedCommands):
+                self.safeSendData(connection, Intents.INVALID_COMMAND)
+
+            
 
     def recvConnection(self):
         # Listen for incoming connections
         self.welcSocket.listen()
 
-        while(1):
+        while(True):
             print('Waiting for connections...')
             connection, addr = self.welcSocket.accept()
             
@@ -337,7 +359,7 @@ class Server():
                 self.lock.notify()
 
     
-    def threadReciever(self, clientSocket, addr):
+    def threadReceiver(self, clientSocket, addr):
         while (True):
             message = None
             try:

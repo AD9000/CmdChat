@@ -48,12 +48,12 @@ class Client():
             # Try to log the user in:
             response = self.sendDataToServer(message)
             if (response.decode() == Intents.AUTH_SUCCESS):
-                print ('login accepted')
+                print (response.decode())
                 self.onConnected()
                 return True
             else:
                 if (response):
-                    print(response.decode())
+                    print(response.decode(), '\n')
                 else:
                     print ('Internal Server Error')
                     self.endClient(1)
@@ -65,7 +65,7 @@ class Client():
         recv_thread.daemon=True
         recv_thread.start()
 
-        self.safeRecieveData()
+        # self.safeRecieveData()
 
     # def handleClose(self, connection):
     #     while (True):
@@ -95,13 +95,23 @@ class Client():
                 return True
             time.sleep(timeout)
 
-    def serverMessage(self, user, message):
+    def serverMessage(self, userInput):
+        if (not userInput) or (len(userInput) < 2):
+            return False
+            
+        user = userInput[1]
+        message = ' '.join(userInput[2:])
         self.safeSendAll([Intents.MESSAGE, user, message], 1)
 
     def handleCommands(self):
         while (True):
-            command = input("$ ")
-            # command.split
+            inp = input("$ ").strip().split()
+            
+            # Extract command and params
+            command = inp[0]
+
+            if (command in self.supportedCommands):
+                self.supportedCommands[command](inp)
 
 
 
@@ -125,25 +135,30 @@ class Client():
 
     def safeRecieveData(self):
         while (True):
-            self.clientSocket.settimeout(2)
+            # self.clientSocket.settimeout(2)
             try:
                 # print ('recieving data')
                 message = self.clientSocket.recv(2048)
 
                 # logout if needed
-                if (message.decode() == Intents.LOGOUT):
-                    print (self.clientSocket.recv(2048).decode())
-                    self.logout()
+                # if (message.decode() == Intents.LOGOUT):
+                #     print (self.clientSocket.recv(2048).decode())
+                #     self.logout()
 
                 # otherwise print the reponse out
                 print (message.decode())
+                return message.decode()
 
                 # Reset timeout
-                self.clientSocket.settimeout(None)
+                # self.clientSocket.settimeout(None)
 
-                time.sleep(1)
-            except socket.timeout:
-                continue
+                # time.sleep(1)
+            # except socket.timeout:
+            #     print ('timeout')
+            #     continue
+            except socket.error or IOError:
+                self.unexpectedClose()
+                self.logout()
             except Exception as e:
                 print ('Exception while recieving data ---> ', e)
                 break
