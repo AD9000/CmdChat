@@ -63,6 +63,7 @@ class Authorization():
     
     def logout(self, user):
         with self.lock:
+            print (self.clients)
             if (user not in self.clients):
                 return
             self.clients.remove(user)

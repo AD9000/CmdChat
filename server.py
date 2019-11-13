@@ -90,7 +90,7 @@ class Server():
                 # print (username, passw)
                 print (e)
                 if (self.checksocket(connection)):
-                    print ('unexpected client closure')
+                    self.unexpectedClientClosure()
                     self.logout(connection)
                 else:
                     print ('Invalid format!')
@@ -115,10 +115,10 @@ class Server():
         print (self.clients)
         
         with self.lock:
-            for client in self.clients.keys():
+            for client in self.clients.values():
                 try:
                     print(client)
-                    client.send(message.encode())
+                    client[Data.CONNECTION].send(message.encode())
                     print ('broadcast sent')
                 except socket.timeout:
                     self.logout(client)
@@ -175,7 +175,7 @@ class Server():
         connection = self.clients[username][Data.CONNECTION]
 
         print ('logging user out ', self.clients[username])
-        self.auth.logout(self.clients[username][Data.CONNECTION])
+        self.auth.logout(username)
         self.clients[username][Data.IS_LOGGED_IN] = False
         self.clients[username][Data.LAST_LOGOUT_TIME] = datetime.datetime.now()
 
@@ -183,28 +183,29 @@ class Server():
         self.safeSendData(connection, Intents.LOGOUT)
         time.sleep(0.1)
         if (additionalMessage):
-            self.sendData(connection, additionalMessage)
-
-        if connection.fileno() != -1:
-            # print ('')
-            connection.close()
-            print (connection.fileno())
+            if (not self.safeSendData(connection, additionalMessage)):
+                self.unexpectedClientClosure()
         
         print(self.clients[username])
 
         # end the current thread
-        self.endSession(0)
+        self.endSession(0, connection)
     
     def sendData(self, connection, message):
         connection.send(message.encode())
+
+    def unexpectedClientClosure(self):
+        print ('Unexpected client closure')
+
+        # No need to continue session if client closed
+        # self.endSession(0, connection)
 
     def safeSendData(self, connection, message):
         try:
             connection.send(message.encode())
             return True
-        except:
-            if (not self.isClosed(connection)):
-                connection.close()
+        except socket.error or IOError:
+            self.unexpectedClientClosure()
             return False
 
     def recieveData(self, clientSocket):
@@ -278,10 +279,12 @@ class Server():
         pass
 
     '''
-    Ends the current session with the client
+    Ends the current session with the client. Closes the socket which may be open
     Note: The server can still accept new clients after this operation
     '''
-    def endSession(self, exitCode=0):
+    def endSession(self, exitCode=0, connection=None):
+        if (connection and connection.fileno() != -1):
+            connection.close()
         sys.exit(exitCode)
 
     '''
@@ -298,13 +301,17 @@ class Server():
             username = self.login(connection)
             if not username:
                 # End session immediately
-                self.endSession()
+                self.endSession(connection=connection)
 
-            elif (not self.safeSendData(connection, Intents.LOGIN_ACCEPT)):
-                self.logout(self.clients[username])
+            # Tell the client the login is accepted. If that does not work, then log the user out
+            # elif (not self.safeSendData(connection, Intents.LOGIN_ACCEPT)):
+            #     self.logout(self.clients[username])
         else:
             # User cannot do anything else before logging in.
             self.safeSendData(connection, Intents.LOGIN_REJECT)
+
+        # At this point the user is logged in. Now to handle any other commands that the user issues.
+        # Dont worry about the timeout. Thats what the 
 
     def recvConnection(self):
         # Listen for incoming connections
@@ -315,7 +322,7 @@ class Server():
             connection, addr = self.welcSocket.accept()
             
             # Create new thread to handle the connection...
-            recv_thread=threading.Thread(name="ClientHandler", target=self.handleConnection, args=[connection, addr])
+            recv_thread=threading.Thread(target=self.handleConnection, args=[connection, addr])
             recv_thread.daemon=True
             recv_thread.start()
 

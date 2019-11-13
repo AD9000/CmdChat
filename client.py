@@ -26,10 +26,16 @@ class Client():
         print("Welcome to CmdChat. Finally you get to talk to your friends through the best UI ever: The command line! *Fireworks in background*")
         
     def login(self):
+        print ('connecting...')
         self.connectToServer(50)
+        print ('connected...')
 
         # Prime the server by sending an intent to it
-        self.sendDataToServer(str(Intents.LOGIN_USER))
+        if (self.safeSendData(Intents.LOGIN_USER)):
+            print ('Server cannot be reached')
+            self.endClient(0)
+
+        print ('sent data')
 
         # Get the username and password and try to login
         while (True):
@@ -41,7 +47,8 @@ class Client():
 
             # Try to log the user in:
             response = self.sendDataToServer(message)
-            if (response == b'Login Successful'):
+            if (response.decode() == Intents.AUTH_SUCCESS):
+                print ('login accepted')
                 self.onConnected()
                 return True
             else:
@@ -68,9 +75,24 @@ class Client():
     #         time.sleep(1)
     #         print(connection.fileno())
 
+    def unexpectedClose(self):
+        print ('The connection was closed unexpectedly')
+
+    def safeSendData(self, message):
+        try:
+            self.clientSocket.send(message.encode())
+        except socket.error:
+            self.unexpectedClose()
+            return True
+        except IOError:
+            self.unexpectedClose()
+            return True
+
     def safeSendAll(self, messages, timeout):
         for message in messages:
-            self.clientSocket.send(message)
+            # Send the message. If there was an error, abort
+            if (self.safeSendData(message)):
+                return True
             time.sleep(timeout)
 
     def serverMessage(self, user, message):
@@ -79,6 +101,7 @@ class Client():
     def handleCommands(self):
         while (True):
             command = input("$ ")
+            # command.split
 
 
 
@@ -161,6 +184,8 @@ class Client():
         sys.exit(exitCode)
 
 def getCmdArg(index):
+    if (not sys.argv):
+        return None
     if index < len(sys.argv) and sys.argv[index]:
         return sys.argv[index]
 
@@ -170,7 +195,9 @@ def usage():
 
 if __name__ == "__main__":
     serverIP = getCmdArg(1)
-    serverPort = int(getCmdArg(2))
+    serverPort = None
+    if (getCmdArg(2)):
+        serverPort = int(getCmdArg(2))
 
     if (not (serverPort or serverIP)):
         usage()
