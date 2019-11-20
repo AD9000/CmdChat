@@ -9,6 +9,8 @@ import Intents
 import Data
 import select
 import datetime
+from CaseInsensitiveDict import CaseInsensitiveDict
+import Messages
 
 class Server():
     def __init__(self, serverPort = 12000, blockDuration=10, timeout=1000):
@@ -27,14 +29,112 @@ class Server():
         signal.signal(signal.SIGINT, self.signal_handler)
 
         # Clients and their sockets
-        self.clients = {}
+        clientlist = self.auth.loadClients()
+        self.clients = dict(zip(clientlist, [{} for i in range(len(clientlist))]))
+
+        self.activeUsers = {}
 
         # Commands supported by the server
-        self.supportedCommands = {Intents.MESSAGE: self.publicMessage}
+        self.supportedCommands = CaseInsensitiveDict({Intents.MESSAGE: self.publicMessage, Intents.BROADCAST: self.userBroadcast, Intents.WHOELSE: self.whoelse, Intents.WHOELSESINCE: self.whoelsesince})
 
         # Yet to figure out the use for these
         self.Update_Interval = 1
 
+    def whoelse(self, fromuser, data):
+        online = []
+        with self.lock:
+            for user in self.clients.keys():
+                if (user == fromuser):
+                    continue
+                if (Data.IS_LOGGED_IN in self.clients[user]) and (self.clients[user][Data.IS_LOGGED_IN]):
+                    online.append(user)
+        
+        # Send intent to user
+        self.safeSendAllOrLogout(self.clients[fromuser][Data.CONNECTION], [Intents.WHOELSE] + online + [Intents.END_OF_COMMS], 0.2)
+    
+    def whoelsesince(self, fromuser, data):
+        print(data)
+        elapsed = float(data[0])
+        whoelse = []
+        with self.lock:
+            for user in self.clients.keys():
+                if (user == fromuser):
+                    continue
+                if (Data.IS_LOGGED_IN in self.clients[user]) and (self.clients[user][Data.IS_LOGGED_IN]):
+                    whoelse.append(user)
+                elif (Data.LAST_LOGOUT_TIME in self.clients[user]) and ((datetime.datetime.now() - self.clients[user][Data.LAST_LOGOUT_TIME]).total_seconds() <= 10):
+                    whoelse.append(user)
+        
+        # Send intent to user
+        self.safeSendAllOrLogout(self.clients[fromuser][Data.CONNECTION], [Intents.WHOELSESINCE] + whoelse + [Intents.END_OF_COMMS], 0.1)
+    
+
+    def safeSendAllOrLogout(self, connection, messages, timeout):
+        for message in messages:
+            # Send the message. If there was an error, abort
+            if (self.safeSendDataOrLogout(connection, message)):
+                return True
+            time.sleep(timeout)
+
+    def userBroadcast(self, fromuser, message):
+        print(message)
+        data = message.pop(0)
+        with self.lock:
+            for user in self.clients.keys():
+                if (user == fromuser):
+                    continue
+                if (Data.IS_LOGGED_IN in self.clients[user]) and (self.clients[user][Data.IS_LOGGED_IN]):
+                    self.publicMessage(fromuser, [user, 'Broadcast: ' + data], False)
+
+    def authorizeMessage(self, fromuser, touser):
+        with self.lock:
+            if (Data.BLOCKED_CLIENTS in self.clients[fromuser].keys()) and (touser in self.clients[fromuser][Data.BLOCKED_CLIENTS]):
+                print ('does it have the field? ', Data.BLOCKED_CLIENTS in self.clients[fromuser].keys())
+                
+                return False
+            return True
+
+    def publicMessage(self, fromuser, data, storeMessage=True):
+        try:
+            touser, message = data
+            print (touser, message)
+        except: 
+            self.safeSendDataOrLogout(self.clients[fromuser][Data.CONNECTION], Intents.INVALID_COMMAND)
+            return
+        # Find the user:
+        with self.lock:
+            # Invalid user sending a message...
+            if not (fromuser in self.clients.keys()):
+                return
+
+            # no such user to send data to
+            if not (touser in self.clients.keys()):
+                self.safeSendDataOrLogout(self.clients[fromuser][Data.CONNECTION], Messages.USER_NOT_FOUND)
+                return
+
+            # user trying to send message to himself
+            if (fromuser == touser):
+                self.safeSendDataOrLogout(self.clients[fromuser][Data.CONNECTION], Messages.RECIEVER_EQUALS_SENDER)
+                return
+
+            # sender is blocked by receiver
+            if (not self.authorizeMessage(fromuser, touser)):
+                self.safeSendDataOrLogout(self.clients[fromuser][Data.CONNECTION], Messages.RECIEVER_BLOCKED_SENDER + ' by ' + touser)
+                return
+
+            # if the user is not online, store the message instead (if thats what is asked...)
+            if (not self.clients[touser][Data.IS_LOGGED_IN]):
+                if (not storeMessage):
+                    return
+                if not self.clients[touser][Data.UNREAD_MESSAGES]:
+                    self.clients[touser][Data.UNREAD_MESSAGES] = []
+                self.clients[touser][Data.UNREAD_MESSAGES].append(' >> ' + fromuser + ": " + message)
+                self.safeSendDataOrLogout(self.clients[fromuser][Data.CONNECTION], (' >> ' + touser + " is not online at the moment. They can look at your message when they come online"))
+            # send the message!
+            else:
+                print ('sending the message from ', fromuser, 'to', touser, 'using connection', self.clients[touser][Data.CONNECTION])
+                self.safeSendDataOrLogout(self.clients[touser][Data.CONNECTION], (' >> ' + fromuser + ": " + message))
+            
     
     # def getCmdArg(self, args, argToFind):
     #     for arg in range(len(args)):
@@ -58,7 +158,12 @@ class Server():
                 # Get the login details from the client
                 print('starting again...')
                 loginDetails = self.receiveData(connection)
-                username, passw = [x.strip() for x in loginDetails.split()]
+                details = [x.strip() for x in loginDetails.split()]
+                if (not (details and len(details) == 2)):
+                    self.sendData(connection, Intents.LOGIN_REJECT)
+                    time.sleep(0.1)
+                    continue
+                username, passw = details
 
                 # Authorize the client. If it works, send the response back
                 response = self.auth.authorize(username, passw)
@@ -68,7 +173,7 @@ class Server():
                 print (username, passw)
 
                 if (not response):
-                    connection.send(b'Internal Server Error')
+                    self.sendData('Internal Server Error')
                 else:
                     print ('sending the response back to the clients')
                     print (response)
@@ -91,8 +196,7 @@ class Server():
             except Exception as e:
                 print ('exception during client login-----> ', loginDetails)
                 # print (username, passw)
-                print (e)
-                if (self.checksocket(connection)):
+                if (not self.checksocket(connection)):
                     self.unexpectedClientClosure()
                     self.logout(connection)
                 else:
@@ -101,32 +205,42 @@ class Server():
     
     def checksocket(self, connection):
         try:
-            ret = select.select([connection], [], [], 0.5)
-            if (connection in ret[0]):
+            connection.settimeout(2)
+            self.sendData(connection, Intents.ACTIVITY_CHECK)
+            message = self.receiveData(connection)
+            connection.settimeout(None)
+
+            if (message.decode() == Intents.ACTIVE):
                 return True
-            else:
-                return False
-        except Exception as e:
-            print ('Exception checking socket ---> ', e)
             return False
+        except (socket.timeout, IOError):
+            return False
+        except Exception as e:
+            print ('Exception while checking socket data ---> ', e)
+            return False
+
 
 
     def broadcast(self, message):
         print (message)
         if (not message):
             return
-        print (self.clients)
         
         with self.lock:
+            print (self.clients.values())
             for client in self.clients.values():
                 try:
-                    print(client)
+                    print (client)
+                    if (not ((Data.IS_LOGGED_IN in client.keys()) and client[Data.IS_LOGGED_IN])):
+                        continue
                     client[Data.CONNECTION].send(message.encode())
                     print ('broadcast sent')
                 except socket.timeout:
-                    self.logout(client)
+                    self.logout(client[Data.CONNECTION], client[Data.USERNAME])
+                    break
                 except Exception as e:
                     print ('exception while broadcasting ----> ' + str(e))
+                    break
 
     def startThread(self, targetFunc, daemon, arguments):
         # Create new thread.
@@ -139,10 +253,20 @@ class Server():
         # Assuming that the client is not logged in yet
         # send broadCast
         self.broadcast(username + ' has joined.')
-        # with self.lock:
+        with self.lock:
         #     print ('got lock')
-        if username not in self.clients.keys():
-            self.clients[username] = {}
+            if username not in self.clients.keys():
+                self.clients[username] = {}
+
+            # init a blocked clients list if that does not exists
+            if not Data.BLOCKED_CLIENTS in self.clients[username].keys():
+                self.clients[username][Data.BLOCKED_CLIENTS] = {}
+            
+            # for unread messages
+            if (not Data.UNREAD_MESSAGES in self.clients[username].keys()):
+                self.clients[username][Data.UNREAD_MESSAGES] = []
+
+            self.activeUsers[connection] = username
 
         # Store the username
         self.addData(username, Data.USERNAME, username)
@@ -159,6 +283,7 @@ class Server():
         # init a timeout for logging the user out
         self.addData(username, Data.TIMEOUT, int(self.timeout))
 
+
         print('done adding data')
 
     def addData(self, username, tag, data):
@@ -171,11 +296,18 @@ class Server():
             if (self.clients and self.clients[username]):
                 self.clients[username][Data.TIMEOUT] = self.timeout
 
-    def logout(self, username, additionalMessage=None):
-        if (username not in self.clients.keys()):
+    def logout(self, connection, username = None, additionalMessage=None):
+
+
+        # Remove from active connections
+        with self.lock:
+            self.activeUsers.pop(connection, None)
+
+        if ((not username) or (username not in self.clients.keys()) or (not self.clients[username][Data.IS_LOGGED_IN])):
             return
 
-        connection = self.clients[username][Data.CONNECTION]
+
+        # connection = self.clients[username][Data.CONNECTION]
 
         print ('logging user out ', self.clients[username])
         self.auth.logout(username)
@@ -183,11 +315,12 @@ class Server():
         self.clients[username][Data.LAST_LOGOUT_TIME] = datetime.datetime.now()
 
         # Send the user logout message
-        self.safeSendData(connection, Intents.LOGOUT)
+        if (not self.safeSendData(connection, Intents.LOGOUT)):
+            self.endSession(0, connection)
+
         time.sleep(0.1)
         if (additionalMessage):
-            if (not self.safeSendData(connection, additionalMessage)):
-                self.unexpectedClientClosure()
+            self.safeSendData(connection, additionalMessage)
         
         print(self.clients[username])
 
@@ -195,6 +328,7 @@ class Server():
         self.endSession(0, connection)
     
     def sendData(self, connection, message):
+        print ('sending data -----> ', message)
         connection.send(message.encode())
 
     def unexpectedClientClosure(self):
@@ -202,25 +336,30 @@ class Server():
 
         # No need to continue session if client closed
         # self.endSession(0, connection)
+    
+    def cleanup(self, connection):
+        self.logout(connection, self.activeUsers[connection])
+        self.endSession(0, connection)
 
     def safeSendData(self, connection, message):
         try:
             connection.send(message.encode())
             return True
-        except socket.error or IOError:
+        except (socket.error, IOError):
             self.unexpectedClientClosure()
             return False
 
     def receiveData(self, clientSocket):
-        return clientSocket.recv(2048).decode()
+        return clientSocket.recv(4096).decode()
 
     def safeReceiveData(self, connection):
         try:
             data = connection.recv(8192).decode()
             if (data == Intents.LOGOUT):
-                self.logout()
+                self.logout(connection, self.activeUsers[connection])
             return data
-        except socket.error or IOError:
+        except (socket.error, IOError) as e:
+            print('io error when receiving data --> ', e)
             self.unexpectedClientClosure()
             return False
     
@@ -243,11 +382,11 @@ class Server():
                     if (self.clients[username][Data.TIMEOUT]):
                         self.clients[username][Data.TIMEOUT] -= 1
                         if self.clients[username][Data.TIMEOUT] == 0:
-                            self.logout(username, '\n\nYou have been automatically logged out due to inactivity')
+                            self.logout(self.clients[username][Data.CONNECTION], username, '\n\nYou have been automatically logged out due to inactivity')
                             break
                     else:
                         # Client does not have a timeout. Log him out!
-                        self.logout(username)
+                        self.logout(self.clients[username][Data.CONNECTION], username)
                         break
         
         # Do nothing if the client is not logged in
@@ -303,7 +442,9 @@ class Server():
 
         # If intent is to login, then log the user in
         if (intent == Intents.LOGIN_USER):
+            connection.settimeout(self.timeout)
             username = self.login(connection)
+            connection.settimeout(None)
             if not username:
                 # End session immediately
                 self.endSession(connection=connection)
@@ -313,7 +454,8 @@ class Server():
             #     self.logout(self.clients[username])
         else:
             # User cannot do anything else before logging in.
-            self.safeSendData(connection, Intents.LOGIN_REJECT)
+            if (not self.safeSendData(connection, Intents.LOGIN_REJECT)):
+                self.logout(connection, username)
 
         # The fact that there is a username means that login was successful
         if (not username):
@@ -323,17 +465,29 @@ class Server():
         # Dont worry about the timeout. Thats what the usertimeout is for
         while (True):
             command = self.safeReceiveData(connection)
-
+            # command = 'something'
             # If command does not exist or is False (there was an error) log user out
-            if (not command):
-                # log the user out
-                self.logout(username)
+            # if (not command):
+            #     # log the user out
+            #     self.logout(username)
 
             # Check if the command is supported
-            if (command not in self.supportedCommands):
-                self.safeSendData(connection, Intents.INVALID_COMMAND)
+            if ((not command) or command not in self.supportedCommands.keys()):
+                self.safeSendDataOrLogout(connection, Intents.INVALID_COMMAND)
+            else:
+                # Recieve all the data client wants to send
+                inp = []
+                data = self.safeReceiveData(connection)
+                while not (data == Intents.END_OF_COMMS):
+                    inp.append(data)
+                    data = self.safeReceiveData(connection)
+                
+                # send data to the required function
+                self.supportedCommands[command](username, inp)
 
-            
+    def safeSendDataOrLogout(self, connection, message, additionalMessage=None):
+        if (not self.safeSendData(connection, message)):
+            self.logout(connection, self.activeUsers[connection], additionalMessage)
 
     def recvConnection(self):
         # Listen for incoming connections

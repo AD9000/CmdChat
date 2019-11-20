@@ -92,6 +92,14 @@ class Authorization():
             self.blockedClients.remove(client)
             self.lock.notify()
     
+    def loadClients(self):
+        clientlist = []
+        f = open('credentials.txt', 'r')
+        for line in f:
+            username = line.split().pop(0)
+            clientlist.append(username)
+        return clientlist
+    
     def createAccount(self, username, passw):
         f = open('credentials.txt', 'a')
         f.write(username + ' ' + passw)
