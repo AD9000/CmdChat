@@ -6,6 +6,7 @@ import threading
 import Intents
 import select
 from CaseInsensitiveDict import CaseInsensitiveDict
+from collections import defaultdict
 
 
 class Client():
@@ -21,12 +22,88 @@ class Client():
         signal.signal(signal.SIGINT, self.signal_handler)
 
         self.lock = threading.Condition()
+        self.pLock = threading.Condition()
+        self.welcSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.welcSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.welcSocket.bind(('', 0))
+        self.welcSocket.listen(10)
 
+        self.welcPort = self.welcSocket.getsockname()[1]
+        self.welcIp = socket.gethostbyname(socket.gethostname())
+        self.name = ''
+
+        self.p2p = defaultdict(lambda: None, {})
         self.supportedCommands = CaseInsensitiveDict({Intents.MESSAGE: self.publicMessage, Intents.BROADCAST: self.broadcast,
-                                                      Intents.WHOELSE: self.whoelse, Intents.WHOELSESINCE: self.whoelsesince, Intents.BLOCK: self.blockUser, Intents.UNBLOCK: self.unblockUser, Intents.LOGOUT: self.logout})
+                                                      Intents.WHOELSE: self.whoelse, Intents.WHOELSESINCE: self.whoelsesince, Intents.BLOCK: self.blockUser, Intents.UNBLOCK: self.unblockUser, Intents.LOGOUT: self.logout,
+                                                      Intents.STARTPRIVATE: self.sendStartPrivate, Intents.PRIVATE: self.safeSendPrivate})
 
     def welcome(self):
         print("Welcome to CmdChat. Finally you get to talk to your friends through the best UI ever: The command line! *Fireworks in background*")
+
+    def startPrivate(self):
+        user = self.clientSocket.recv(4096).decode()
+        # accept data from the server and create new private connection
+        data = self.clientSocket.recv(4096).decode()
+        if (not data):
+            print('Internal Server Error')
+
+        ip, port = data.split()
+        print('trying to connect to ', ip, port)
+
+        try:
+            self.p2p[user] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.connect(self.p2p[user], ip, int(port), 1000)
+            print('sending your username...', self.name)
+            self.safeSendData(self.name, self.p2p[user])
+
+            # Allow messaging from the user
+            p2pthread = threading.Thread(
+                target=self.handlePeer, args=[self.p2p[user], ip], daemon=True)
+            p2pthread.start()
+
+            print('You are now connected privately with ', user)
+
+        except Exception as e:
+            print('could not connect because ', e)
+
+    def safeSendPrivate(self, data):
+        if (not data) or len(data) < 3:
+            print('Usage: private <user> <message>')
+        user = data[1]
+        message = ' '.join(data[2:])
+        if (user not in self.p2p):
+            print('To message user privately, connect to them first using startprivate')
+            return
+
+        try:
+            self.safeSendData(self.name + ' (Private): ' +
+                              message, self.p2p[user])
+        except Exception as e:
+            print('Could not send data because', e)
+
+    # def safelySendPrivateData(self, connection, message):
+    #     if (not connection):
+    #         connection = self.clientSocket
+    #     try:
+    #         connection.send(message.encode())
+    #     except socket.error:
+    #         self.unexpectedClose()
+    #         return True
+    #     except IOError:
+    #         self.unexpectedClose()
+    #         return True
+
+    def sendStartPrivate(self, data):
+        print('in start private....', data)
+        if (not data) or len(data) < 2:
+            print('Usage: startprivate <user>')
+            return
+
+        print('startprivate called from client')
+
+        # Send intent to start private
+        self.safeSendAll([Intents.STARTPRIVATE, data[1],
+                          Intents.END_OF_COMMS], 0.1)
 
     def login(self):
         print('connecting...')
@@ -52,8 +129,7 @@ class Client():
             response = self.sendDataToServer(message)
             if (response.decode() == Intents.AUTH_SUCCESS):
                 print(response.decode())
-                self.onConnected()
-                return True
+                break
             else:
                 if (response):
                     print(response.decode(), '\n')
@@ -61,12 +137,44 @@ class Client():
                     print('You have been automatically timed out due to inactivity')
                     self.endClient(1)
 
+        self.onConnected()
+
+    def handleP2PMessaging(self):
+        self.welcSocket.listen(10)
+        while(True):
+            connection, addr = self.welcSocket.accept()
+
+            p2pThread = threading.Thread(target=self.handlePeer, args=[
+                                         connection, addr], daemon=True)
+            p2pThread.start()
+
+    def handlePeer(self, connection, addr):
+        # add the user to the p2p list
+        data = self.safeReceiveData(connection)
+        print('handling peer...', data)
+
+        with self.pLock:
+            self.p2p[data] = connection
+
+        print(self.p2p)
+        # talk to the peer
+        while (True):
+            print(self.safeReceiveData(connection))
+
     def onConnected(self):
+        # send p2p info
+        self.safeSendData(str(self.welcIp) + ' ' + str(self.welcPort))
+        self.name = self.safeReceiveData()
         self.isLoggedIn = True
         # Thread to receive data
         recv_thread = threading.Thread(target=self.handleCommands)
         recv_thread.daemon = True
         recv_thread.start()
+
+        # p2p thread
+        p2p_thread = threading.Thread(target=self.handleP2PMessaging)
+        p2p_thread.daemon = True
+        p2p_thread.start()
 
         self.bgReceiveData()
 
@@ -82,6 +190,8 @@ class Client():
                 # If the response
                 if (message.decode() == Intents.ACTIVITY_CHECK):
                     self.safeSendData(Intents.ACTIVE)
+                elif (message.decode() == Intents.PEERSTARTPRIVATE):
+                    self.recvPrivate()
                 elif (message.decode() == Intents.WHOELSE or message.decode() == Intents.WHOELSESINCE):
                     data = []
                     packet = self.clientSocket.recv(8192).decode()
@@ -89,6 +199,8 @@ class Client():
                         data.append(packet)
                         packet = self.clientSocket.recv(8192).decode()
                     self.displayWhoelse(data)
+                elif (message.decode() == Intents.STARTPRIVATE):
+                    self.startPrivate()
                 elif (message.decode() == Intents.LOGOUT):
                     self.endClient(0)
                 elif (message.decode() == Intents.END_OF_COMMS):
@@ -106,7 +218,7 @@ class Client():
                     # otherwise print the reponse out
                     print(message.decode() + '\n$ ', end='')
 
-            except socket.error or IOError:
+            except (socket.error, IOError):
                 self.unexpectedClose()
                 self.logout()
                 break
@@ -125,9 +237,11 @@ class Client():
     def unexpectedClose(self):
         print('The connection was closed unexpectedly')
 
-    def safeSendData(self, message):
+    def safeSendData(self, message, connection=None):
+        if (not connection):
+            connection = self.clientSocket
         try:
-            self.clientSocket.send(message.encode())
+            connection.send(message.encode())
         except socket.error:
             self.unexpectedClose()
             return True
@@ -165,6 +279,7 @@ class Client():
 
                 # Extract command and params
                 command = inp[0]
+                print('input ----> ', inp)
 
                 if (command in self.supportedCommands):
                     self.supportedCommands[command](inp)
@@ -193,12 +308,14 @@ class Client():
                 print('Exception checking socket ---> ', e)
                 break
 
-    def safeReceiveData(self):
+    def safeReceiveData(self, connection=None):
+        if (not connection):
+            connection = self.clientSocket
         while (True):
             # self.clientSocket.settimeout(2)
             try:
                 # print ('recieving data')
-                message = self.clientSocket.recv(2048)
+                message = connection.recv(2048)
 
                 # logout if needed
                 # if (message.decode() == Intents.LOGOUT):
@@ -229,6 +346,9 @@ class Client():
 
     def handleTimeout(self):
         pass
+
+    def connect(self, sock, ip, port, timeoutT):
+        sock.connect((ip, port))
 
     def connectToServer(self, timeoutT):
         self.clientSocket.connect((self.serverIP, self.serverPort))
