@@ -1,3 +1,6 @@
+'''
+List of commands passed between server and client or p2p
+'''
 ACTIVITY_CHECK = 'Just checking...'
 ACTIVE = 'COOL'
 LOGIN_USER = '0'
