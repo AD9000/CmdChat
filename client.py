@@ -318,6 +318,7 @@ class Client():
 
     def publicMessage(self, userInput):
         if (not userInput) or (len(userInput) < 2):
+            print('Usage: message <user> <message>')
             return
 
         # Send a message request...
@@ -454,10 +455,6 @@ class Client():
         self.endClient()
 
     def endClient(self, exitCode=0):
-        # Close the socket
-        if self.clientSocket.fileno() != -1:
-            self.clientSocket.close()
-
         # done
         sys.exit(exitCode)
 
