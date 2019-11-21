@@ -157,6 +157,9 @@ class Server():
         if (not fromuser) or fromuser not in self.clients.keys():
             return
 
+        # broadcast
+        self.broadcast(fromuser + ' logged out.')
+
         # logout and send permissions
         self.logout(self.clients.get(fromuser).get(Data.CONNECTION),
                     fromuser, 'You have successfully been logged out')
