@@ -25,7 +25,7 @@ class Authorization():
                     # print ('check false')
                     # print (username)
                     # print (self.invalidCount)
-                    if (self.invalidCount and self.invalidCount[username] and (self.invalidCount[username] + 1 == 3)):
+                    if (self.invalidCount and (username in self.invalidCount.keys()) and (self.invalidCount[username] + 1 == 3)):
                         # print ('blocking user')
                         self.invalidCount[username] = 0
                         blockT = threading.Thread(target=self.blockClient, args=[username])
@@ -35,7 +35,7 @@ class Authorization():
                         return 'Too many invalid logins. You have been blocked for ' + str(self.blockDuration) + ' seconds.'
                     else:
                         print ('added to count')
-                        if (self.invalidCount and self.invalidCount[username]):
+                        if (self.invalidCount and (username in self.invalidCount)):
                             self.invalidCount[username] += 1
                         else:
                             self.invalidCount[username] = 1

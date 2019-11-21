@@ -7,6 +7,7 @@ import Intents
 import select
 from CaseInsensitiveDict import CaseInsensitiveDict
 
+
 class Client():
     def __init__(self, serverIP, serverPort):
         self.serverIP = serverIP
@@ -21,22 +22,23 @@ class Client():
 
         self.lock = threading.Condition()
 
-        self.supportedCommands = CaseInsensitiveDict({'message': self.publicMessage, 'broadcast': self.broadcast, 'whoelse': self.whoelse, 'whoelsesince':self.whoelsesince})
+        self.supportedCommands = CaseInsensitiveDict({Intents.MESSAGE: self.publicMessage, Intents.BROADCAST: self.broadcast,
+                                                      Intents.WHOELSE: self.whoelse, Intents.WHOELSESINCE: self.whoelsesince, Intents.BLOCK: self.blockUser, Intents.UNBLOCK: self.unblockUser, Intents.LOGOUT: self.logout})
 
     def welcome(self):
         print("Welcome to CmdChat. Finally you get to talk to your friends through the best UI ever: The command line! *Fireworks in background*")
-        
+
     def login(self):
-        print ('connecting...')
+        print('connecting...')
         self.connectToServer(50)
-        print ('connected...')
+        print('connected...')
 
         # Prime the server by sending an intent to it
         if (self.safeSendData(Intents.LOGIN_USER)):
-            print ('Server cannot be reached')
+            print('Server cannot be reached')
             self.endClient(0)
 
-        print ('sent data')
+        print('sent data')
 
         # Get the username and password and try to login
         while (True):
@@ -49,26 +51,26 @@ class Client():
             # Try to log the user in:
             response = self.sendDataToServer(message)
             if (response.decode() == Intents.AUTH_SUCCESS):
-                print (response.decode())
+                print(response.decode())
                 self.onConnected()
                 return True
             else:
                 if (response):
                     print(response.decode(), '\n')
                 else:
-                    print ('You have been automatically timed out due to inactivity')
+                    print('You have been automatically timed out due to inactivity')
                     self.endClient(1)
-    
+
     def onConnected(self):
         self.isLoggedIn = True
         # Thread to receive data
-        recv_thread=threading.Thread(target=self.handleCommands)
-        recv_thread.daemon=True
+        recv_thread = threading.Thread(target=self.handleCommands)
+        recv_thread.daemon = True
         recv_thread.start()
 
         self.bgReceiveData()
-    
-    def displayWhoelse(self, data): 
+
+    def displayWhoelse(self, data):
         for person in data:
             print('>> ' + person)
 
@@ -77,7 +79,7 @@ class Client():
             try:
                 message = self.clientSocket.recv(8192)
 
-                # If the response 
+                # If the response
                 if (message.decode() == Intents.ACTIVITY_CHECK):
                     self.safeSendData(Intents.ACTIVE)
                 elif (message.decode() == Intents.WHOELSE or message.decode() == Intents.WHOELSESINCE):
@@ -87,18 +89,31 @@ class Client():
                         data.append(packet)
                         packet = self.clientSocket.recv(8192).decode()
                     self.displayWhoelse(data)
+                elif (message.decode() == Intents.LOGOUT):
+                    self.endClient(0)
+                elif (message.decode() == Intents.END_OF_COMMS):
+                    pass
+                # elif (message.decode() == Intents.UNREAD_MESSAGES):
+                #     reply = input(
+                #         '\nWould you like to read your unread messages? (y/n)')
+                #     if reply and (reply[0] == 'y' or reply[0] == 'Y'):
+                #         self.safeSendData(Intents.YES)
+                #         packet = self.clientSocket.recv(8192).decode()
+                #         while (packet != Intents.END_OF_COMMS):
+                #             print(packet)
+                #             packet = self.clientSocket.recv(8192).decode()
                 else:
                     # otherwise print the reponse out
-                    print (message.decode() + '\n$ ', end='')
+                    print(message.decode() + '\n$ ', end='')
 
             except socket.error or IOError:
                 self.unexpectedClose()
                 self.logout()
                 break
             except Exception as e:
-                print ('Exception while recieving data ---> ', e)
+                print('Exception while recieving data ---> ', e)
                 break
-            
+
     # def handleClose(self, connection):
     #     while (True):
     #         if (connection.fileno() == -1):
@@ -108,7 +123,7 @@ class Client():
     #         print(connection.fileno())
 
     def unexpectedClose(self):
-        print ('The connection was closed unexpectedly')
+        print('The connection was closed unexpectedly')
 
     def safeSendData(self, message):
         try:
@@ -128,51 +143,54 @@ class Client():
             time.sleep(timeout)
 
     def publicMessage(self, userInput):
-        print (userInput)
+        print(userInput)
         if (not userInput) or (len(userInput) < 2):
-            return 
-            
+            return
+
         # Send a message request...
 
         user = userInput[1]
         message = ' '.join(userInput[2:])
-        self.safeSendAll([Intents.MESSAGE, user, message, Intents.END_OF_COMMS], 0.1)
+        self.safeSendAll([Intents.MESSAGE, user, message,
+                          Intents.END_OF_COMMS], 0.1)
 
     def handleCommands(self):
         while (True):
             try:
-                inp = input().strip().split()
-                
+                inp = input()
+                if (not inp):
+                    continue
+
+                inp = inp.strip().split()
+
                 # Extract command and params
                 command = inp[0]
 
                 if (command in self.supportedCommands):
                     self.supportedCommands[command](inp)
                     # time.sleep(0.1)
-                else: 
-                    print ('Command not supported:', inp[0])
+                else:
+                    print('Command not supported:', inp[0])
             except KeyboardInterrupt:
                 print('You interrupted!')
                 break
-
-
 
     def checksocket(self):
         while True:
             try:
                 ret = select.select([self.clientSocket], [], [], 5)
-                
+
                 print(ret)
                 if (self.clientSocket in ret[0]):
-                    print ('was readable')
+                    print('was readable')
                     continue
                 else:
-                    print ('nope')
+                    print('nope')
                     self.logout()
                     break
                 print(ret)
             except Exception as e:
-                print ('Exception checking socket ---> ', e)
+                print('Exception checking socket ---> ', e)
                 break
 
     def safeReceiveData(self):
@@ -188,7 +206,7 @@ class Client():
                 #     self.logout()
 
                 # otherwise print the reponse out
-                print (message.decode())
+                print(message.decode())
                 return message.decode()
 
                 # Reset timeout
@@ -202,9 +220,9 @@ class Client():
                 self.unexpectedClose()
                 self.logout()
             except Exception as e:
-                print ('Exception while recieving data ---> ', e)
+                print('Exception while recieving data ---> ', e)
                 break
-    
+
     def logout(self):
         print('Exiting...')
         self.endClient(0)
@@ -220,11 +238,11 @@ class Client():
         try:
             if self.clientSocket.fileno() != -1:
                 self.clientSocket.send(message.encode())
-                #wait for the reply from the server
+                # wait for the reply from the server
                 receivedMessage = self.clientSocket.recv(2048)
                 return receivedMessage
         except socket.timeout:
-            print ('Connection timed out')
+            print('Connection timed out')
             self.clientSocket.close()
         except Exception as e:
             print(e)
@@ -232,8 +250,10 @@ class Client():
     '''
     Send broadcast messages
     '''
+
     def broadcast(self, message):
         if (not message) or len(message) <= 1:
+            print('Usage: broadcast <message>')
             return
         command = message[0]
         data = ' '.join(message[1:])
@@ -242,31 +262,70 @@ class Client():
     '''
     get list of people currently online
     '''
+
     def whoelse(self, data):
         # send a whoelse intent
-        self.safeSendAll([Intents.WHOELSE, Intents.END_OF_COMMS], 0.2)
+        self.safeSendAll([Intents.WHOELSE, Intents.END_OF_COMMS], 0.1)
 
-    
     '''
     get list of people that have been online for the past <time> seconds
     '''
-    def whoelsesince(self, data):
 
-        print ('in client -----> ', data)
+    def whoelsesince(self, data):
+        if (not data) or len(data) < 1:
+            print('Usage: whoelsesince <time(seconds)>')
+            return
         time = data[1]
         # send a whoelse intent
-        self.safeSendAll([Intents.WHOELSESINCE, time, Intents.END_OF_COMMS], 0.1)
+        self.safeSendAll([Intents.WHOELSESINCE, time,
+                          Intents.END_OF_COMMS], 0.1)
+
+    '''
+    Block someone!
+    '''
+
+    def blockUser(self, data):
+        if (not data) or len(data) < 1:
+            print('Usage: block <user>')
+            return
+
+        user = data[1]
+
+        # Send block intent
+        self.safeSendAll([Intents.BLOCK, user, Intents.END_OF_COMMS], 0.1)
+
+    '''
+    Unblock someone who is blocked
+    '''
+
+    def unblockUser(self, data):
+        if (not data) or len(data) < 1:
+            print('Usage: unblock <user>')
+
+        user = data[1]
+
+        # Send unblock intent
+        self.safeSendAll([Intents.UNBLOCK, user, Intents.END_OF_COMMS], 0.1)
+
+    '''
+    Logout
+    '''
+
+    def logout(self, data):
+        # Send a logout intent
+        self.safeSendAll([Intents.LOGOUT, Intents.END_OF_COMMS], 0.1)
 
     def signal_handler(self, sig, frame):
         self.endClient()
 
-    def endClient(self, exitCode = 0):
+    def endClient(self, exitCode=0):
         # Close the socket
         if self.clientSocket.fileno() != -1:
-            self.clientSocket.close()   
+            self.clientSocket.close()
 
         # done
         sys.exit(exitCode)
+
 
 def getCmdArg(index):
     if (not sys.argv):
@@ -274,9 +333,11 @@ def getCmdArg(index):
     if index < len(sys.argv) and sys.argv[index]:
         return sys.argv[index]
 
+
 def usage():
-    print ('Usage: python3 client.py <Server Ip Address> <Server Port No>')
+    print('Usage: python3 client.py <Server Ip Address> <Server Port No>')
     sys.exit(0)
+
 
 if __name__ == "__main__":
     serverIP = getCmdArg(1)
@@ -295,7 +356,6 @@ if __name__ == "__main__":
     # Must login before using anything.
     if (client.login()):
         client.handleCommands()
-
 
     # print (client.sendDataToServer("lets see if this works..."))
     # time.sleep(3)
