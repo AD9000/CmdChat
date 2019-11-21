@@ -24,6 +24,7 @@ class Client():
         self.lock = threading.Condition()
         self.pLock = threading.Condition()
         self.welcSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
         self.welcSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.welcSocket.bind(('', 0))
         self.welcSocket.listen(10)
@@ -32,13 +33,60 @@ class Client():
         self.welcIp = socket.gethostbyname(socket.gethostname())
         self.name = ''
 
+        self.validpeers = []
+
         self.p2p = defaultdict(lambda: None, {})
         self.supportedCommands = CaseInsensitiveDict({Intents.MESSAGE: self.publicMessage, Intents.BROADCAST: self.broadcast,
                                                       Intents.WHOELSE: self.whoelse, Intents.WHOELSESINCE: self.whoelsesince, Intents.BLOCK: self.blockUser, Intents.UNBLOCK: self.unblockUser, Intents.LOGOUT: self.logout,
-                                                      Intents.STARTPRIVATE: self.sendStartPrivate, Intents.PRIVATE: self.safeSendPrivate})
+                                                      Intents.STARTPRIVATE: self.sendStartPrivate, Intents.PRIVATE: self.safeSendPrivate,
+                                                      Intents.STOPPRIVATE: self.stopprivate})
 
     def welcome(self):
         print("Welcome to CmdChat. Finally you get to talk to your friends through the best UI ever: The command line! *Fireworks in background*")
+
+    def safeClose(self, connection):
+        if (not connection):
+            return
+        if (connection.fileno() != -1):
+            connection.close()
+
+    def stopprivate(self, data):
+        if (not data) or len(data) < 2:
+            print('Usage: stopprivate <user>')
+            return
+
+        # user and connection
+        print(data)
+        user = data[1]
+        check = True
+
+        if (len(data) > 2):
+            check = data[2]
+            if (check is None):
+                return
+
+        with self.pLock:
+            if (not user) or (user not in self.p2p):
+                print('You had never connected with', user)
+                return
+
+            connection = self.p2p.get(user)
+
+            print('Closed your private connection with', user)
+            # tell the user
+            if (check):
+                try:
+                    connection.send(user.encode())
+                    time.sleep(0.2)
+                    connection.send(Intents.STOPPRIVATE.encode())
+                except:
+                    pass
+
+            # get the socket and close it
+            self.safeClose(connection)
+
+            # Remove from list
+            self.p2p.pop(user)
 
     def startPrivate(self):
         user = self.clientSocket.recv(4096).decode()
@@ -51,15 +99,18 @@ class Client():
         print('trying to connect to ', ip, port)
 
         try:
-            self.p2p[user] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.connect(self.p2p[user], ip, int(port), 1000)
-            print('sending your username...', self.name)
-            self.safeSendData(self.name, self.p2p[user])
+            newsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.connect(newsock, ip, int(port), 1000)
 
-            # Allow messaging from the user
-            p2pthread = threading.Thread(
-                target=self.handlePeer, args=[self.p2p[user], ip], daemon=True)
-            p2pthread.start()
+            print('sending your username...', self.name, 'to', user)
+            with self.pLock:
+                self.p2p[user] = newsock
+                self.safeSendData(self.name, self.p2p[user])
+
+                # Allow messaging from the user
+                p2pthread = threading.Thread(
+                    target=self.handlePeer, args=[self.p2p.get(user)], daemon=True)
+                p2pthread.start()
 
             print('You are now connected privately with ', user)
 
@@ -67,6 +118,7 @@ class Client():
             print('could not connect because ', e)
 
     def safeSendPrivate(self, data):
+        print('safe send data called')
         if (not data) or len(data) < 3:
             print('Usage: private <user> <message>')
         user = data[1]
@@ -76,8 +128,13 @@ class Client():
             return
 
         try:
-            self.safeSendData(self.name + ' (Private): ' +
-                              message, self.p2p[user])
+            print('sending message', message)
+            if (self.safeSendData(self.name, self.p2p.get(user))):
+                self.stopprivate([Intents.STOPPRIVATE, user, False])
+            time.sleep(0.1)
+            if (self.safeSendData(self.name + ' (Private): ' +
+                                  message, self.p2p.get(user))):
+                self.stopprivate([Intents.STOPPRIVATE, user, False])
         except Exception as e:
             print('Could not send data because', e)
 
@@ -140,32 +197,87 @@ class Client():
         self.onConnected()
 
     def handleP2PMessaging(self):
+        p2pThread = None
         self.welcSocket.listen(10)
         while(True):
+            connection = None
+            addr = None
+            print('accepting...')
             connection, addr = self.welcSocket.accept()
+            print('accepted', connection, addr)
 
             p2pThread = threading.Thread(target=self.handlePeer, args=[
-                                         connection, addr], daemon=True)
+                                         connection])
+            p2pThread.daemon = True
             p2pThread.start()
 
-    def handlePeer(self, connection, addr):
+    def getValidPeers(self):
+        self.safeSendAll([Intents.GETVALIDPEERS, Intents.END_OF_COMMS], 0.2)
+
+        data = self.safeReceiveData()
+        while (data != Intents.END_OF_COMMS):
+            with self.lock:
+                self.validpeers.append(data)
+            data = self.safeReceiveData()
+
+    def handlePeer(self, connection):
         # add the user to the p2p list
-        data = self.safeReceiveData(connection)
-        print('handling peer...', data)
+        user = self.safeReceiveData(connection)
+        if (not user):
+            self.safeClose(connection)
+            self.endClient(0)
+
+        if (user == Intents.STOPPRIVATE):
+            print('shutting down private sess')
+            with self.pLock:
+                self.p2p.pop(user)
+            self.safeClose(connection)
+            self.endClient(0)
+        print('handling peer...', user)
 
         with self.pLock:
-            self.p2p[data] = connection
+            print('valid peers are:', self.validpeers)
+            if (user not in self.p2p) and (user in self.validpeers):
+                self.p2p[user] = connection
+                print('Started private messaging session with', user)
 
         print(self.p2p)
+
         # talk to the peer
         while (True):
-            print(self.safeReceiveData(connection))
+            data = None
+            try:
+                data = connection.recv(4096).decode()
+                print('data received:', data)
+            except (socket.error, IOError):
+                self.safeClose(connection)
+                self.endClient(0)
+            except:
+                pass
+
+            if (not data) or (data and (data == Intents.STOPPRIVATE)):
+                # print('shutting down private sess')
+                if (data and (data == Intents.STOPPRIVATE)):
+                    print('Shutting down private session with', user)
+                with self.pLock:
+                    if (user in self.p2p):
+                        self.p2p.pop(user)
+                self.safeClose(connection)
+                self.endClient(0)
+
+            print(data)
 
     def onConnected(self):
         # send p2p info
         self.safeSendData(str(self.welcIp) + ' ' + str(self.welcPort))
         self.name = self.safeReceiveData()
+
+        # logged in
         self.isLoggedIn = True
+
+        # get list of peers
+        self.getValidPeers()
+
         # Thread to receive data
         recv_thread = threading.Thread(target=self.handleCommands)
         recv_thread.daemon = True
@@ -220,7 +332,7 @@ class Client():
 
             except (socket.error, IOError):
                 self.unexpectedClose()
-                self.logout()
+                self.endClient(1)
                 break
             except Exception as e:
                 print('Exception while recieving data ---> ', e)
@@ -242,10 +354,7 @@ class Client():
             connection = self.clientSocket
         try:
             connection.send(message.encode())
-        except socket.error:
-            self.unexpectedClose()
-            return True
-        except IOError:
+        except (socket.error, IOError):
             self.unexpectedClose()
             return True
 
@@ -301,7 +410,7 @@ class Client():
                     continue
                 else:
                     print('nope')
-                    self.logout()
+                    self.endClient(1)
                     break
                 print(ret)
             except Exception as e:
@@ -323,7 +432,6 @@ class Client():
                 #     self.logout()
 
                 # otherwise print the reponse out
-                print(message.decode())
                 return message.decode()
 
                 # Reset timeout
@@ -335,14 +443,14 @@ class Client():
             #     continue
             except socket.error or IOError:
                 self.unexpectedClose()
-                self.logout()
+                self.endClient(1)
             except Exception as e:
                 print('Exception while recieving data ---> ', e)
                 break
 
-    def logout(self):
-        print('Exiting...')
-        self.endClient(0)
+    # def logout(self):
+    #     print('Exiting...')
+    #     self.endClient(0)
 
     def handleTimeout(self):
         pass
@@ -436,6 +544,8 @@ class Client():
         self.safeSendAll([Intents.LOGOUT, Intents.END_OF_COMMS], 0.1)
 
     def signal_handler(self, sig, frame):
+        for conn in self.p2p:
+            self.safeClose(conn)
         self.endClient()
 
     def endClient(self, exitCode=0):
